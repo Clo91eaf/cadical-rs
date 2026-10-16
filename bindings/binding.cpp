@@ -1,10 +1,19 @@
 #include "cadical.hpp"
 #include "craigtracer.hpp"
+#include "internal.hpp"
 #include "stdio.h"
 #include <cassert>
 #include <cstddef>
 
 using namespace CaDiCaL;
+
+// Opt-in counter for bounded incremental clients. The counter is connected
+// through CaDiCaL's InternalTracer API and reads the bundled solver's stats.
+class ConflictCounter : public InternalTracer {
+public:
+  Internal *internal = nullptr;
+  void connect_internal(Internal *i) override { internal = i; }
+};
 
 extern "C" {
 void *cadical_solver_new() { return new Solver(); }
@@ -17,6 +26,27 @@ void cadical_solver_free(void *s) {
 void cadical_solver_reserve(void *s, int max_var) {
   Solver *slv = (Solver *)s;
   slv->reserve(max_var);
+}
+
+void cadical_solver_limit_conflicts(void *s, int limit) {
+  static_cast<Solver *>(s)->limit("conflicts", limit);
+}
+
+void *cadical_conflict_counter_new(void *s) {
+  auto *counter = new ConflictCounter();
+  static_cast<Solver *>(s)->connect_proof_tracer(counter, false);
+  return counter;
+}
+
+int64_t cadical_conflict_counter_value(void *counter) {
+  auto *c = static_cast<ConflictCounter *>(counter);
+  return c->internal->stats.conflicts;
+}
+
+void cadical_conflict_counter_free(void *s, void *counter) {
+  auto *c = static_cast<ConflictCounter *>(counter);
+  static_cast<Solver *>(s)->disconnect_proof_tracer(c);
+  delete c;
 }
 
 void cadical_solver_add_clause(void *s, int *clause, int len) {

@@ -10,6 +10,10 @@ unsafe extern "C" {
     fn cadical_solver_new() -> *mut c_void;
     fn cadical_solver_free(s: *mut c_void);
     fn cadical_solver_reserve(s: *mut c_void, max_var: c_int);
+    fn cadical_solver_limit_conflicts(s: *mut c_void, limit: c_int);
+    fn cadical_conflict_counter_new(s: *mut c_void) -> *mut c_void;
+    fn cadical_conflict_counter_value(counter: *mut c_void) -> i64;
+    fn cadical_conflict_counter_free(s: *mut c_void, counter: *mut c_void);
     fn cadical_solver_add_clause(s: *mut c_void, clause: *mut c_int, len: c_int);
     fn cadical_solver_solve(s: *mut c_void, assumps: *mut c_int, len: c_int) -> c_int;
     fn cadical_solver_constrain(s: *mut c_void, constrain: *mut c_int, len: c_int);
@@ -47,6 +51,7 @@ pub struct CaDiCaL {
     solver: *mut c_void,
     num_var: usize,
     tracer_map: GHashMap<*const c_void, *const c_void>,
+    conflict_counter: *mut c_void,
 }
 
 impl CaDiCaL {
@@ -55,6 +60,7 @@ impl CaDiCaL {
             solver: unsafe { cadical_solver_new() },
             num_var: 0,
             tracer_map: GHashMap::default(),
+            conflict_counter: std::ptr::null_mut(),
         }
     }
 }
@@ -184,6 +190,26 @@ impl Satif for CaDiCaL {
 }
 
 impl CaDiCaL {
+    /// Limit conflicts in the next solve call; a negative value is unlimited.
+    pub fn limit_conflicts(&mut self, limit: i32) {
+        unsafe { cadical_solver_limit_conflicts(self.solver, limit) };
+    }
+
+    /// Opt in before loading CNF. Normal clients do not install a counter.
+    pub fn enable_conflict_counter(&mut self) {
+        if self.conflict_counter.is_null() {
+            self.conflict_counter = unsafe { cadical_conflict_counter_new(self.solver) };
+        }
+    }
+
+    pub fn conflicts(&self) -> u64 {
+        assert!(
+            !self.conflict_counter.is_null(),
+            "conflict counter is not enabled"
+        );
+        unsafe { cadical_conflict_counter_value(self.conflict_counter) as u64 }
+    }
+
     /// Initialize variables through `max_var` in one allocation pass. Call
     /// before loading a large CNF to avoid repeatedly growing solver tables.
     /// Like adding clauses, this may invalidate an existing satisfying model.
@@ -205,6 +231,9 @@ impl CaDiCaL {
 
 impl Drop for CaDiCaL {
     fn drop(&mut self) {
+        if !self.conflict_counter.is_null() {
+            unsafe { cadical_conflict_counter_free(self.solver, self.conflict_counter) };
+        }
         unsafe { cadical_solver_free(self.solver) };
     }
 }
@@ -314,4 +343,32 @@ mod clause_export_tests {
         assert_eq!(solver.simplify(), Some(false));
         assert_eq!(solver.clauses(), vec![LitVec::new()]);
     }
+}
+
+#[test]
+fn incremental_conflict_budget_is_measured_and_can_be_reset() {
+    let mut solver = CaDiCaL::new();
+    solver.enable_conflict_counter();
+    solver.reserve(Var(30));
+    let pigeons: Vec<Vec<_>> = (0..6)
+        .map(|p| (0..5).map(|h| Var::new(p * 5 + h).lit()).collect())
+        .collect();
+    for row in &pigeons {
+        solver.add_clause(row);
+    }
+    for a in 0..6 {
+        for b in a + 1..6 {
+            for h in 0..5 {
+                solver.add_clause(&[!pigeons[a][h], !pigeons[b][h]]);
+            }
+        }
+    }
+    solver.limit_conflicts(1);
+    let first = solver.try_solve(&[], vec![]);
+    assert!(first.is_none() || first == Some(false));
+    assert!(solver.conflicts() > 0);
+    let consumed = solver.conflicts();
+    solver.limit_conflicts(-1);
+    assert_eq!(solver.try_solve(&[], vec![]), Some(false));
+    assert!(solver.conflicts() >= consumed);
 }
