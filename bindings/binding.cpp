@@ -62,6 +62,16 @@ int cadical_solver_fixed(void *s, int lit) {
   return slv->fixed(lit);
 }
 
+bool cadical_set_option(void *s, const char *name, int val) {
+  Solver *slv = (Solver *)s;
+  return slv->set(name, val);
+}
+
+int cadical_get_option(void *s, const char *name) {
+  Solver *slv = (Solver *)s;
+  return slv->get(name);
+}
+
 void cadical_solver_freeze(void *s, int lit) {
   Solver *slv = (Solver *)s;
   slv->freeze(lit);

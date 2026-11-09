@@ -15,6 +15,9 @@ unsafe extern "C" {
     fn cadical_solver_constrain(s: *mut c_void, constrain: *mut c_int, len: c_int);
     fn cadical_solver_simplify(s: *mut c_void) -> c_int;
     fn cadical_solver_freeze(s: *mut c_void, lit: c_int);
+    fn cadical_solver_fixed(s: *mut c_void, lit: c_int) -> c_int;
+    fn cadical_set_option(s: *mut c_void, name: *const std::ffi::c_char, val: c_int) -> bool;
+    fn cadical_get_option(s: *mut c_void, name: *const std::ffi::c_char) -> c_int;
     fn cadical_set_polarity(s: *mut c_void, lit: c_int);
     fn cadical_unset_polarity(s: *mut c_void, lit: c_int);
     fn cadical_solver_model_value(s: *mut c_void, lit: c_int) -> c_int;
@@ -56,6 +59,31 @@ impl CaDiCaL {
             num_var: 0,
             tracer_map: GHashMap::default(),
         }
+    }
+
+    /// The value of a literal fixed at the root level (by units and
+    /// propagation at decision level 0), if any.
+    pub fn fixed(&self, lit: Lit) -> Option<bool> {
+        if Into::<usize>::into(lit.var()) >= self.num_var {
+            return None;
+        }
+        match unsafe { cadical_solver_fixed(self.solver, lit_to_cadical_lit(&lit)) } {
+            1 => Some(true),
+            -1 => Some(false),
+            _ => None,
+        }
+    }
+
+    /// Sets a CaDiCaL option (`cadical --help` lists them); false if the
+    /// name or the value is not accepted.
+    pub fn set_option(&mut self, name: &str, val: i32) -> bool {
+        let name = std::ffi::CString::new(name).unwrap();
+        unsafe { cadical_set_option(self.solver, name.as_ptr(), val) }
+    }
+
+    pub fn get_option(&self, name: &str) -> i32 {
+        let name = std::ffi::CString::new(name).unwrap();
+        unsafe { cadical_get_option(self.solver, name.as_ptr()) }
     }
 }
 
